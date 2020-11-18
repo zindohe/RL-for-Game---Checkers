@@ -41,11 +41,15 @@ class Environment:
             for col in range(len(lines[row])):
                 self.states[(row, col)] = lines[row][col]
 
-    def apply(self, state, action):
-        if action == MOVE_lEFT:
-            new_state = (state[0]-1, state[1]-1)
-        elif action == MOVE_RIGHT:
-            new_state = (state[0]-1, state[1]+1)
+    def apply(self, state, pawn, action):
+        reward = REWARD_DEFAULT
+        for i in range(len(state)):
+            if state[i] == pawn:
+                if action == MOVE_lEFT:
+                    new_state = (state[i][0]-1, state[i][1]-1)
+                elif action == MOVE_RIGHT:
+                    new_state = (state[i][0]-1, state[i][1]+1)
+
 
         if new_state in self.states:
             if self.states[new_state] in ['#', 'O']:
@@ -57,10 +61,11 @@ class Environment:
             reward = REWARD_LOSS
         return new_state, reward
 
+
 class Agent:
     def __init__(self, environment):
         self.environment = environment
-        self.policy = Policy(environment.states.keys(), ACTIONS, environment.width, environment.height)
+        self.policy = Policy(ACTIONS, environment.width, environment.height)
         self.reset()
 
     def reset(self):
@@ -78,14 +83,17 @@ class Agent:
         self.score = 0
 
     def best_action(self, player):
-        return self.policy.best_action(self.state)
+        return self.policy.best_action(self.state[player])
 
-    def do(self, action, player):
+    def do(self, pawn, action, player):
         self.previous_state = self.state
-        self.state, self.reward = self.environment.apply(self.state[player], action)
+        self.previous_pawn = pawn
+        self.state, self.reward = self.environment.apply(self.state[player], pawn, action)
         self.score += self.reward
         self.last_action = action
 
+    def update_policy(self):
+        self.policy.update(agent.previous_pawn, agent.state, self.last_action, self.reward)
 
 class Policy:
     def __init__(self, actions, width, height,
@@ -107,27 +115,27 @@ class Policy:
         self.mlp.fit([[0, 0]], [[0, 0]])
         self.q_vector = None
 
-        def __repr__(self):
-            return self.q_vector
+    def __repr__(self):
+        return self.q_vector
 
-        def state_to_dataset(self, state_pawn):
-            return np.array([[state_pawn[0] / self.maxX, state_pawn[1] / self.maxY]])
+    def state_to_dataset(self, state_pawn):
+        return np.array([[state_pawn[0] / self.maxX, state_pawn[1] / self.maxY]])
 
-        def best_action(self, state_player):
-            pawn = state_player[random.randint(0, len(state_player))]
-            self.q_vector = self.mlp.predict(self.state_to_dataset(state_player))[0]
-            action = self.actions[np.argmax(self.q_vector)]
-            return action
+    def best_action(self, state_player):
+        pawn = state_player[random.randint(0, len(state_player)-1)]
+        self.q_vector = self.mlp.predict(self.state_to_dataset(pawn))[0]
+        action = self.actions[np.argmax(self.q_vector)]
+        return pawn, action
 
-        def update(self, previous_state, state, last_action, reward):
-            maxQ = np.amax(self.q_vector)
-            last_action = ACTIONS.index(last_action)
-            print(self.q_vector, maxQ, self.q_vector[last_action])
-            self.q_vector[last_action] += reward + self.discount_factor * maxQ
+    def update(self, previous_state, state, last_action, reward):
+        maxQ = np.amax(self.q_vector)
+        last_action = ACTIONS.index(last_action)
+        print(self.q_vector, maxQ, self.q_vector[last_action])
+        self.q_vector[last_action] += reward + self.discount_factor * maxQ
 
-            inputs = self.state_to_dataset(previous_state)
-            outputs = np.array([self.q_vector])
-            self.mlp.fit(inputs, outputs)
+        inputs = self.state_to_dataset(previous_state)
+        outputs = np.array([self.q_vector])
+        self.mlp.fit(inputs, outputs)
 
 
 class BoardWindow(arcade.Window):
@@ -140,6 +148,7 @@ class BoardWindow(arcade.Window):
     def setup(self):
         self.walls = arcade.SpriteList()
         self.tiles = arcade.SpriteList()
+        self.pawns = arcade.SpriteList()
 
         for state in agent.environment.states:
             if agent.environment.states[state] == '#':
@@ -147,11 +156,29 @@ class BoardWindow(arcade.Window):
                 sprite.center_x = sprite.width * (state[1] + 0.5)
                 sprite.center_y = sprite.height * (agent.environment.height - state[0] - 0.5)
                 self.walls.append(sprite)
-            elif agent.environment.states[state] == ' ':
+            elif agent.environment.states[state] == '.':
                 sprite = arcade.Sprite(":resources:images/tiles/sandCenter.png", 0.5)
                 sprite.center_x = sprite.width * (state[1] + 0.5)
                 sprite.center_y = sprite.height * (agent.environment.height - state[0] - 0.5)
                 self.tiles.append(sprite)
+            for pawn_0 in agent.state[0]:
+                if pawn_0 == state:
+                    sprite = arcade.Sprite(":resources:images/items/coinSilver.png", 0.5)
+                    sprite.center_x = sprite.width * (state[1] + 0.5)
+                    sprite.center_y = sprite.height * (agent.environment.height - state[0] - 0.5)
+                    self.pawns.append(sprite)
+            for pawn_1 in agent.state[1]:
+                if pawn_1 == state:
+                    sprite = arcade.Sprite(":resources:images/items/coinGold.png", 0.5)
+                    sprite.center_x = sprite.width * (state[1] + 0.5)
+                    sprite.center_y = sprite.height * (agent.environment.height - state[0] - 0.5)
+                    self.pawns.append(sprite)
+
+    def on_update(self, delta_time):
+        pawn, action = self.agent.best_action(0)
+        self.agent.do(pawn, action, 0)
+        self.agent.update_policy()
+        self.setup()
 
     def on_key_press(self, key, modifiers):
         if key == arcade.key.R:
@@ -162,6 +189,7 @@ class BoardWindow(arcade.Window):
 
         self.walls.draw()
         self.tiles.draw()
+        self.pawns.draw()
         arcade.draw_text(f"Score: {self.agent.score}", 10, 10, arcade.csscolor.WHITE, 20)
 
 if __name__ == '__main__':
