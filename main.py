@@ -21,6 +21,8 @@ ACTIONS = [MOVE_lEFT, MOVE_RIGHT]
 PLAYER_0, PLAYER_1 = 0, 1
 
 REWARD_STUCK = -60
+REWARD_NOT_AVAILABLE = -40
+REWARD_CANT_EAT = -20
 REWARD_LOSS = -6
 REWARD_DEFAULT = -1
 REWARD_GAIN = 6
@@ -41,26 +43,108 @@ class Environment:
             for col in range(len(lines[row])):
                 self.states[(row, col)] = lines[row][col]
 
-    def apply(self, state, pawn, action):
+    def apply(self, state, pawn, action, player):
         reward = REWARD_DEFAULT
-        for i in range(len(state)):
-            if state[i] == pawn:
-                if action == MOVE_lEFT:
-                    new_state = (state[i][0]-1, state[i][1]-1)
-                elif action == MOVE_RIGHT:
-                    new_state = (state[i][0]-1, state[i][1]+1)
+        new_state = None
 
+        # Correspondance de la case
+        find = False
+        for temp_pawn in state[player]:
 
-        if new_state in self.states:
-            if self.states[new_state] in ['#', 'O']:
-                reward = REWARD_STUCK
-            elif self.states[new_state] in ['.']:
-                reward = REWARD_DEFAULT
+            if temp_pawn == pawn:
+
+                find = True
+                break
+
+        if not find:
+
+            reward = REWARD_STUCK
+
         else:
-            new_state = state
-            reward = REWARD_LOSS
-        return new_state, reward
 
+            # Le bouger
+            # Calcul coordonéee
+            # Column x:
+            #   Si gauche x + 1
+            #   Si droite x - 1
+            # Ligne y:
+            #  Joeur 1 y + 1
+            #  Joeur 2 y - 1
+            # 
+            new_player_state = (
+                pawn[0] + 1 if player == 0 else pawn[0] - 1, 
+                pawn[1] + 1 if action == MOVE_RIGHT else pawn[1] - 1
+            )
+
+
+            for temp_pawn in state[player]:
+
+                if temp_pawn == new_player_state:
+
+                    reward = REWARD_NOT_AVAILABLE
+                    break
+
+            for temp_pawn in state[not player]:
+
+                if temp_pawn == new_player_state:
+
+                    new_player_state, reward = self.check_position(new_player_state, state[not player], player)
+
+
+            if new_player_state[0] == 0 or new_player_state[0] == 9 or new_player_state[1] == 0 or new_player_state[1] == 11:
+
+                reward = REWARD_NOT_AVAILABLE
+
+
+
+            print(pawn)
+            print(new_player_state)
+        
+
+        return state, reward
+
+
+    def check_position(self, pawn, ennemy_state, player):
+
+        # Créer un state droite
+        # Vérifier que ce nouveau n'est pas déja pris
+        #   si oui => X on check à gauche
+        #   si non => on garde ce state et donne un gros reward
+
+        # Créer un state gauche
+        # Vérifier que ce nouveau n'est pas déja pris
+        #   si oui => On annule et on donne un reward -20 
+        #   si non => on garde ce state et donne un gros reward
+        state_right = (
+            pawn[0] + 1 if player == 0 else pawn[0] - 1, 
+            pawn[1] + 1
+        )
+
+        found  = False
+
+        for ennemy_pawn in ennemy_state:
+
+            if ennemy_pawn == state_right:
+
+                found = True
+                break
+
+        if not found:
+
+            return state_right, REWARD_GAIN
+
+        state_left = (
+            pawn[0] + 1 if player == 0 else pawn[0] - 1, 
+            pawn[1] - 1
+        )
+
+        for ennemy_pawn in ennemy_state:
+
+            if ennemy_pawn == state_left:
+
+                return pawn, REWARD_CANT_EAT
+
+        return state_left, REWARD_GAIN
 
 class Agent:
     def __init__(self, environment):
@@ -83,12 +167,14 @@ class Agent:
         self.score = 0
 
     def best_action(self, player):
-        return self.policy.best_action(self.state[player])
+        return self.policy.best_action(self.state, player)
 
     def do(self, pawn, action, player):
         self.previous_state = self.state
         self.previous_pawn = pawn
-        self.state, self.reward = self.environment.apply(self.state[player], pawn, action)
+        self.state, self.reward = self.environment.apply(self.state, pawn, action, player)
+
+        print("reward:", self.reward)
         self.score += self.reward
         self.last_action = action
 
@@ -107,25 +193,74 @@ class Policy:
         self.maxY = height
 
         self.mlp = MLPRegressor(hidden_layer_sizes = (8,),
-                                activation = 'tanh',
+                                activation = 'relu',
                                 solver = 'sgd',
                                 learning_rate_init = self.learning_rate,
                                 max_iter = 1,
                                 warm_start = True)
-        self.mlp.fit([[0, 0]], [[0, 0]])
+
+        output_fit_array = []
+        output_fit_array.append(np.zeros(width * height).tolist())
+        output_fit_array.append([0,0])
+        # output_fit_array.append([0,0])
+
+        self.mlp.fit(
+            [[0 for x in range(width * height)]], 
+            [[item for sublist in output_fit_array for item in sublist]]
+        )
         self.q_vector = None
 
     def __repr__(self):
         return self.q_vector
 
-    def state_to_dataset(self, state_pawn):
-        return np.array([[state_pawn[0] / self.maxX, state_pawn[1] / self.maxY]])
+    def state_to_dataset(self, state, player):
+        output = []
 
-    def best_action(self, state_player):
-        pawn = state_player[random.randint(0, len(state_player)-1)]
-        self.q_vector = self.mlp.predict(self.state_to_dataset(pawn))[0]
-        action = self.actions[np.argmax(self.q_vector)]
-        return pawn, action
+        for y in range(self.maxY):
+
+            temp = np.zeros(self.maxX).tolist()
+
+            for x in range(self.maxX):
+
+                if x == 0 or x == self.maxX - 1 or y == 0 or y == self.maxY - 1:
+
+                    temp[x] = -1
+
+
+            output.append(temp)
+
+        for temp_player_index, temp_player in enumerate(state):
+
+            value = 1 if temp_player_index == player else 2
+
+            for paw_position in temp_player:
+
+                output[paw_position[0]][paw_position[1]] = value
+
+        return [[item for sublist in output for item in sublist]]
+
+    def best_action(self, state, player):
+        format_dataset = self.state_to_dataset(state, player)
+        self.q_vector = self.mlp.predict(format_dataset)[0]
+
+        test = self.q_vector[:len(self.q_vector) - 2]
+
+        # print(len(format_dataset[0]))
+        max = np.argmax(test)
+        print(format_dataset[0][max])
+
+        col = (max % 12)
+        row = (max // 11)
+
+        return (row, col), self.actions[np.argmax(self.q_vector[-2:])]
+        # for test in self.q_vector:
+
+        #     print(test)
+        # # print(self.q_vector[0])
+        # print(np.argmax(self.q_vector))
+        # print(np.argmin(self.q_vector))
+        # action = self.actions[np.argmax(self.q_vector)]
+        # return pawn, action
 
     def update(self, previous_state, state, last_action, reward):
         maxQ = np.amax(self.q_vector)
@@ -196,6 +331,15 @@ if __name__ == '__main__':
     environment = Environment(BOARD)
     agent = Agent(environment)
 
-    window = BoardWindow(agent)
-    window.setup()
-    arcade.run()
+    pawn, action = agent.best_action(0)
+
+    print("pawn", pawn)
+    print("action", action)
+
+    agent.do(pawn, action, 0)
+
+    
+
+    # window = BoardWindow(agent)
+    # window.setup()
+    # arcade.run()
