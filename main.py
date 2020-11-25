@@ -33,6 +33,7 @@ DEFAULT_DISCOUNT_FACTOR = 0.5
 
 SPRITE_SIZE = 64
 
+
 class Environment:
     def __init__(self, text):
         self.states = {}
@@ -52,99 +53,81 @@ class Environment:
         for temp_pawn in state[player]:
 
             if temp_pawn == pawn:
-
                 find = True
                 break
 
         if not find:
-
             reward = REWARD_STUCK
-
         else:
-
-            # Le bouger
-            # Calcul coordonéee
-            # Column x:
-            #   Si gauche x + 1
-            #   Si droite x - 1
-            # Ligne y:
-            #  Joeur 1 y + 1
-            #  Joeur 2 y - 1
-            # 
             new_player_state = (
-                pawn[0] + 1 if player == 0 else pawn[0] - 1, 
+                pawn[0] + 1 if player == 0 else pawn[0] - 1,
                 pawn[1] + 1 if action == MOVE_RIGHT else pawn[1] - 1
             )
 
-
             for temp_pawn in state[player]:
-
                 if temp_pawn == new_player_state:
-
                     reward = REWARD_NOT_AVAILABLE
                     break
 
             for temp_pawn in state[not player]:
-
                 if temp_pawn == new_player_state:
+                    new_player_state, reward = self.check_position(new_player_state, state, player)
+                    if reward == REWARD_GAIN:
+                        if player:
+                            state = (
+                            state[not player], list(filter(lambda v: False if v == temp_pawn else True, state[player])))
+                        else:
+                            state = (
+                            list(filter(lambda v: False if v == temp_pawn else True, state[player])), state[not player])
 
-                    new_player_state, reward = self.check_position(new_player_state, state[not player], player)
-
-
-            if new_player_state[0] == 0 or new_player_state[0] == 9 or new_player_state[1] == 0 or new_player_state[1] == 11:
-
+            if new_player_state[0] == 0 or new_player_state[0] == 9 or new_player_state[1] == 0 or new_player_state[
+                1] == 11:
                 reward = REWARD_NOT_AVAILABLE
 
-
-
-            print(pawn)
-            print(new_player_state)
-        
+        if reward == REWARD_DEFAULT:
+            if player:
+                state = (state[not player], list(map(lambda v: new_player_state if v == pawn else v, state[player])))
+            else:
+                state = (list(map(lambda v: new_player_state if v == pawn else v, state[player])), state[not player])
 
         return state, reward
 
-
-    def check_position(self, pawn, ennemy_state, player):
-
-        # Créer un state droite
-        # Vérifier que ce nouveau n'est pas déja pris
-        #   si oui => X on check à gauche
-        #   si non => on garde ce state et donne un gros reward
-
-        # Créer un state gauche
-        # Vérifier que ce nouveau n'est pas déja pris
-        #   si oui => On annule et on donne un reward -20 
-        #   si non => on garde ce state et donne un gros reward
+    def check_position(self, pawn, state, player):
         state_right = (
-            pawn[0] + 1 if player == 0 else pawn[0] - 1, 
+            pawn[0] + 1 if player == 0 else pawn[0] - 1,
             pawn[1] + 1
         )
 
-        found  = False
+        found = False
 
-        for ennemy_pawn in ennemy_state:
-
+        for ennemy_pawn in state[not player]:
             if ennemy_pawn == state_right:
+                found = True
+                break
 
+        for pawn in state[player]:
+            if pawn == state_right:
                 found = True
                 break
 
         if not found:
-
             return state_right, REWARD_GAIN
 
         state_left = (
-            pawn[0] + 1 if player == 0 else pawn[0] - 1, 
+            pawn[0] + 1 if player == 0 else pawn[0] - 1,
             pawn[1] - 1
         )
 
-        for ennemy_pawn in ennemy_state:
-
+        for ennemy_pawn in state[not player]:
             if ennemy_pawn == state_left:
+                return pawn, REWARD_CANT_EAT
 
+        for pawn in state[player]:
+            if pawn == state_right:
                 return pawn, REWARD_CANT_EAT
 
         return state_left, REWARD_GAIN
+
 
 class Agent:
     def __init__(self, environment):
@@ -176,15 +159,16 @@ class Agent:
 
         print("reward:", self.reward)
         self.score += self.reward
-        self.last_action = action
+        self.last_pawn_action = (pawn, action)
 
-    def update_policy(self):
-        self.policy.update(agent.previous_pawn, agent.state, self.last_action, self.reward)
+    def update_policy(self, player):
+        self.policy.update(agent.state, self.last_pawn_action, self.reward, player)
+
 
 class Policy:
     def __init__(self, actions, width, height,
-                 learning_rate = DEFAULT_LEARNING_RATE,
-                 discount_factor = DEFAULT_DISCOUNT_FACTOR):
+                 learning_rate=DEFAULT_LEARNING_RATE,
+                 discount_factor=DEFAULT_DISCOUNT_FACTOR):
 
         self.learning_rate = learning_rate
         self.discount_factor = discount_factor
@@ -192,20 +176,20 @@ class Policy:
         self.maxX = width
         self.maxY = height
 
-        self.mlp = MLPRegressor(hidden_layer_sizes = (8,),
-                                activation = 'relu',
-                                solver = 'sgd',
-                                learning_rate_init = self.learning_rate,
-                                max_iter = 1,
-                                warm_start = True)
+        self.mlp = MLPRegressor(hidden_layer_sizes=(8,),
+                                activation='relu',
+                                solver='sgd',
+                                learning_rate_init=self.learning_rate,
+                                max_iter=1,
+                                warm_start=True)
 
         output_fit_array = []
         output_fit_array.append(np.zeros(width * height).tolist())
-        output_fit_array.append([0,0])
+        output_fit_array.append([0, 0])
         # output_fit_array.append([0,0])
 
         self.mlp.fit(
-            [[0 for x in range(width * height)]], 
+            [[0 for x in range(width * height)]],
             [[item for sublist in output_fit_array for item in sublist]]
         )
         self.q_vector = None
@@ -223,9 +207,7 @@ class Policy:
             for x in range(self.maxX):
 
                 if x == 0 or x == self.maxX - 1 or y == 0 or y == self.maxY - 1:
-
                     temp[x] = -1
-
 
             output.append(temp)
 
@@ -234,42 +216,40 @@ class Policy:
             value = 1 if temp_player_index == player else 2
 
             for paw_position in temp_player:
-
                 output[paw_position[0]][paw_position[1]] = value
 
         return [[item for sublist in output for item in sublist]]
 
     def best_action(self, state, player):
         format_dataset = self.state_to_dataset(state, player)
-        self.q_vector = self.mlp.predict(format_dataset)[0]
+        prediction = self.mlp.predict(format_dataset)[0].tolist()
 
-        test = self.q_vector[:len(self.q_vector) - 2]
+        self.q_vector = (prediction[:len(prediction) - 2], prediction[-2:])
 
         # print(len(format_dataset[0]))
-        max = np.argmax(test)
+        max = np.argmax(self.q_vector[0])
         print(format_dataset[0][max])
 
         col = (max % 12)
         row = (max // 11)
 
-        return (row, col), self.actions[np.argmax(self.q_vector[-2:])]
-        # for test in self.q_vector:
+        return (row, col), self.actions[np.argmax(self.q_vector[1])]
 
-        #     print(test)
-        # # print(self.q_vector[0])
-        # print(np.argmax(self.q_vector))
-        # print(np.argmin(self.q_vector))
-        # action = self.actions[np.argmax(self.q_vector)]
-        # return pawn, action
+    def update(self, state, last_pawn_action, reward, player):
+        max_pawn = np.amax(self.q_vector[0])
+        max_action = np.amax(self.q_vector[1])
 
-    def update(self, previous_state, state, last_action, reward):
-        maxQ = np.amax(self.q_vector)
-        last_action = ACTIONS.index(last_action)
-        print(self.q_vector, maxQ, self.q_vector[last_action])
-        self.q_vector[last_action] += reward + self.discount_factor * maxQ
+        last_action = ACTIONS.index(last_pawn_action[1])
+        last_pawn = np.argmax(self.q_vector[0])
 
-        inputs = self.state_to_dataset(previous_state)
-        outputs = np.array([self.q_vector])
+        print('self.q_vector : ', self.q_vector[0], '\nmax_pawn : ', max_pawn, '\nmax_action : ', max_action)
+        self.q_vector[1][last_action] += reward + self.discount_factor * max_action
+        self.q_vector[0][last_pawn] += reward + self.discount_factor * max_pawn
+
+        inputs = self.state_to_dataset(state, player)
+
+        outputs = np.array([self.q_vector[0] + self.q_vector[1]])
+
         self.mlp.fit(inputs, outputs)
 
 
@@ -327,6 +307,7 @@ class BoardWindow(arcade.Window):
         self.pawns.draw()
         arcade.draw_text(f"Score: {self.agent.score}", 10, 10, arcade.csscolor.WHITE, 20)
 
+
 if __name__ == '__main__':
     environment = Environment(BOARD)
     agent = Agent(environment)
@@ -338,7 +319,7 @@ if __name__ == '__main__':
 
     agent.do(pawn, action, 0)
 
-    
+    agent.update_policy(0)
 
     # window = BoardWindow(agent)
     # window.setup()
