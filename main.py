@@ -1,3 +1,5 @@
+import time
+
 import arcade
 import numpy as np
 from sklearn.neural_network import MLPRegressor
@@ -29,7 +31,7 @@ REWARD_GAIN = 6
 REWARD_WIN = 60
 
 DEFAULT_LEARNING_RATE = 1
-DEFAULT_DISCOUNT_FACTOR = 0.5
+DEFAULT_DISCOUNT_FACTOR = 0.000000005
 
 SPRITE_SIZE = 64
 
@@ -71,17 +73,21 @@ class Environment:
 
             for temp_pawn in state[not player]:
                 if temp_pawn == new_player_state:
-                    new_player_state, reward = self.check_position(new_player_state, state, player)
+                    new_player_state, reward = self.check_position(new_player_state, state, player, self.states)
                     if reward == REWARD_GAIN:
-                        if player:
-                            state = (
-                            state[not player], list(filter(lambda v: False if v == temp_pawn else True, state[player])))
-                        else:
-                            state = (
-                            list(filter(lambda v: False if v == temp_pawn else True, state[player])), state[not player])
+                        if not player: # Joueur 0 -> on met à jour le tableau du joueur 1
+                            state = (state[player], list(filter(lambda v: False if v == temp_pawn else True, state[not player])))
+                        else: # Joueur 1 -> on met à jour le tableau du joueur 0
+                            state = (list(filter(lambda v: False if v == temp_pawn else True, state[not player])), state[player])
 
-            if new_player_state[0] == 0 or new_player_state[0] == 9 or new_player_state[1] == 0 or new_player_state[
-                1] == 11:
+                        if player:
+                            state = (state[not player], list(map(lambda v: new_player_state if v == pawn else v, state[player])))
+                        else:
+                            state = (list(map(lambda v: new_player_state if v == pawn else v, state[player])), state[not player])
+
+                        #time.sleep(120)
+
+            if new_player_state[0] == 0 or new_player_state[0] == 9 or new_player_state[1] == 0 or new_player_state[1] == 11:
                 reward = REWARD_NOT_AVAILABLE
 
         if reward == REWARD_DEFAULT:
@@ -92,7 +98,7 @@ class Environment:
 
         return state, reward
 
-    def check_position(self, pawn, state, player):
+    def check_position(self, pawn, state, player, environment):
         state_right = (
             pawn[0] + 1 if player == 0 else pawn[0] - 1,
             pawn[1] + 1
@@ -110,6 +116,9 @@ class Environment:
                 found = True
                 break
 
+        if state_right[0] == 0 or state_right[0] == 9 or state_right[1] == 0 or state_right[1] == 11:
+            found = True
+
         if not found:
             return state_right, REWARD_GAIN
 
@@ -125,6 +134,10 @@ class Environment:
         for pawn in state[player]:
             if pawn == state_right:
                 return pawn, REWARD_CANT_EAT
+
+
+        if state_left[0] == 0 or state_left[0] == 9 or state_left[1] == 0 or state_left[1] == 11:
+            return pawn, REWARD_CANT_EAT
 
         return state_left, REWARD_GAIN
 
@@ -250,6 +263,7 @@ class Policy:
 
         outputs = np.array([self.q_vector[0] + self.q_vector[1]])
 
+
         self.mlp.fit(inputs, outputs)
 
 
@@ -259,6 +273,7 @@ class BoardWindow(arcade.Window):
                          agent.environment.height * SPRITE_SIZE,
                          "Checkers")
         self.agent = agent
+        self.current_player = 0
 
     def setup(self):
         self.walls = arcade.SpriteList()
@@ -290,10 +305,12 @@ class BoardWindow(arcade.Window):
                     self.pawns.append(sprite)
 
     def on_update(self, delta_time):
-        pawn, action = self.agent.best_action(0)
-        self.agent.do(pawn, action, 0)
-        self.agent.update_policy()
-        self.setup()
+        if self.agent.state[0] and self.agent.state[1]:
+            pawn, action = self.agent.best_action(self.current_player)
+            self.agent.do(pawn, action, self.current_player)
+            self.agent.update_policy(self.current_player)
+            self.setup()
+            self.current_player = not self.current_player
 
     def on_key_press(self, key, modifiers):
         if key == arcade.key.R:
@@ -312,15 +329,15 @@ if __name__ == '__main__':
     environment = Environment(BOARD)
     agent = Agent(environment)
 
-    pawn, action = agent.best_action(0)
+    # pawn, action = agent.best_action(0)
+    #
+    # print("pawn", pawn)
+    # print("action", action)
+    #
+    # agent.do(pawn, action, 0)
+    #
+    # agent.update_policy(0)
 
-    print("pawn", pawn)
-    print("action", action)
-
-    agent.do(pawn, action, 0)
-
-    agent.update_policy(0)
-
-    # window = BoardWindow(agent)
-    # window.setup()
-    # arcade.run()
+    window = BoardWindow(agent)
+    window.setup()
+    arcade.run()
